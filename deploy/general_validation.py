@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -231,7 +232,7 @@ class GeneralValidation(object):
                         analysis_class='IF'): 
 
         y = self._validation_data.copy().reset_index()
-        title = 'General Validation'
+        title = 'General Validation' + title
         factor = prop/100
 
         eixo = np.array(range(len(y['Resultado'][start_num:end_num])))

@@ -17,7 +17,7 @@ def format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
 
     df['data'] = pd.to_datetime(df['data'])
-    df.set_index('data', inplace=True)
+    df.set_index('data', inplace=True, )
 
     return df
 

@@ -75,7 +75,7 @@ class JsonFeature(object):
         tag_info_format["Delay"] = self._delay
         tag_info_format["Window"] = self._window
         tag_info_format["Decay"] = self._decay
-
+        
         return tag_info_format
 
 class CalculatedTagProcessor(object):
@@ -93,12 +93,13 @@ class CalculatedTagProcessor(object):
         global_info = self._tag_info.groupby('Feature Name').agg(pd.Series.mode)
         global_info = global_info.reset_index()[['Feature Name', 'Type']]
         info = dict(**info, **global_info.to_dict(orient='records')[0])
-
+        
         # Add info used to calculate  
         # Numerator
 
         columns_used_to_calculate = [
-            'Tag', 
+            'Tag_PIMS',
+            #'Tag_SDCD', 
             'Host', 
             'Server', 
             'Min', 
@@ -106,12 +107,13 @@ class CalculatedTagProcessor(object):
             'Delay', 
             'Window'
         ]
-
+        
+        self._tag_info['Tag'] = self._tag_info['Tag_SDCD']
 
         info['Numerator'] = self._tag_info[columns_used_to_calculate].to_dict(
             orient='records'
         )
-
+        
         operation = self._tag_info.groupby('Feature Name').agg(pd.Series.mode)
         operation = operation.reset_index()[['Operation']].to_dict(orient='records')[0]
         operation = operation['Operation']
@@ -119,7 +121,7 @@ class CalculatedTagProcessor(object):
         info['Denominator'] = [
             1 if operation == 'Sum' else len(info['Numerator'])
         ]
-
+        
         return info
 
 class MeasuredTagProcessor(object):
@@ -130,8 +132,12 @@ class MeasuredTagProcessor(object):
 
     def format(self):
 
+        self._tag_info['Tag'] = self._tag_info['Tag_SDCD']
         info = self._tag_info.to_dict(orient='records')[0]
 
+        info.pop('Tag_SDCD',None)
+        info.pop('Operation',None)
+        
         return info
 
 class ProcessTagInfo(object):
@@ -163,7 +169,8 @@ class MountJson(object):
                  data: pd.DataFrame, 
                  sync_groups: list,
                  features: list,
-                 sync_type = 'fixo'):
+                 sync_type = 'fixo',
+                 keys={'APPLY_FORGETTING_FUNCTION': 1, 'BUFFER_SIZE': 0}):
         """
         args:
         -----   
@@ -181,6 +188,9 @@ class MountJson(object):
         self._sync_type = sync_type
         self._json_features = None
         self._json_info = None
+        self._keys = keys
+        self._min_max_keys = dict()
+        self._calculate_result_min_max()
         self._filter_by_features()
         self._calculate_min_max()
         self._add_sync_parameters()
@@ -188,7 +198,17 @@ class MountJson(object):
         self._generate_json_tags_info()
         #self.#self._create_format_tags()
         self._mount_json()
-        
+
+    def _calculate_result_min_max(self):
+
+        result_min = self._data.Resultado.min()
+        result_max = self._data.Resultado.max()
+
+        self._min_max_keys['RESULT_MIN'] = result_min 
+        self._min_max_keys['RESULT_MAX'] = result_max 
+
+        return None
+
     def _filter_by_features(self):
 
         self._data = self._data[self._features]
@@ -269,10 +289,10 @@ class MountJson(object):
         json_features = list()
 
         for feature in self._features:
-
+            
             feature_info = self._data.loc[self._data['Feature Name'] == feature]
             process_feature = ProcessTagInfo(feature_info).tag_processor
-
+            
             json_features.append(process_feature.format())
 
         self._json_features = json_features
@@ -306,8 +326,12 @@ class MountJson(object):
     def _mount_json(self):
 
         json_info = dict()
-
+        
         json_info['TAGS'] = self._json_features
+
+        json_info.update(self._keys)
+
+        json_info.update(self._min_max_keys)
 
         self._json_info = json_info
 
@@ -356,7 +380,7 @@ class MountJson(object):
 
 class MountModelInfo(object):
 
-    def __init__(self, name, features, model_type, class_name=None, deadband=1):
+    def __init__(self, name, features, model_type, class_name=None, deadband=None):
         """
         args:
         ----- 
@@ -405,15 +429,18 @@ class MountModelInfo(object):
 
 class MountScriptInput(object):
 
-    def __init__(self, all_features, root_model, other_models):
+    def __init__(self, all_features, root_model, other_models, deadband=1, analyzer_name=''):
 
         self._all_features = all_features
         self._all_features_names = None
         self._root_model = root_model 
         self._other_models = other_models
+        self._deadband = deadband
+        self._analyzer_name = analyzer_name
         self._model_structure = dict() 
         self._create_features_tags()
         self._include_features()
+        self._include_deadband_analyzer_name()
         self._include_root_model()
         self._include_other_models()
 
@@ -428,6 +455,11 @@ class MountScriptInput(object):
         self._model_structure['all_features'] = self._all_features_names
 
         return None  
+
+    def _include_deadband_analyzer_name(self):
+
+        self._model_structure['deadband'] = self._deadband  
+        self._model_structure['analyzer_name'] = self._analyzer_name 
 
     def _include_root_model(self):
 

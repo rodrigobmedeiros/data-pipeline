@@ -1,11 +1,16 @@
 import pandas as pd
 import numpy as np
+import seaborn as sns
 import pickle as pkl
+import json
+import dill as pkl
 import itertools
 import os
 
+from functools import wraps
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import confusion_matrix
+from sklearn.ensemble import GradientBoostingRegressor
 
 import matplotlib.pyplot as plt
 
@@ -22,7 +27,8 @@ class ClassifierInfo(object):
                  metrics_rule=None,
                  features=None, 
                  target=None,
-                 feature_engineering=None):
+                 feature_engineering=None,
+                 model_import_string=None):
 
         self.name = name 
         self.classification_rule = classification_rule 
@@ -35,6 +41,7 @@ class ClassifierInfo(object):
         self.features = features
         self.target = target
         self.feature_engineering = feature_engineering
+        self.model_import_string = model_import_string
 
 class ValidationRuleApplier(object):
     """
@@ -378,8 +385,8 @@ class MountClassifier(object):
         self._cm = None
         self._metadata = MetadataInfo()
         self._apply_validation_rule()
-        self._apply_classification_rule()
         self._apply_feature_engineering()
+        self._apply_classification_rule()
         self._mount_features()
         self._prepare_train_data()
         self._fit_scaler()
@@ -418,19 +425,6 @@ class MountClassifier(object):
         self._validation_data = validation_with_classes.transformed_data 
 
         return None
-
-        def _apply_feature_engineering(self):
-
-            train_with_rule = RuleApplier(self._train_data, 
-                                        rule=self._regressor_info.feature_engineering.get('function'))
-
-            validation_with_rule = RuleApplier(self._validation_data, 
-                                        rule=self._regressor_info.feature_engineering.get('function'))
-
-            self._train_data = train_with_rule.transformed_data
-            self._validation_data = validation_with_rule.transformed_data 
-
-            return None
 
     def _apply_feature_engineering(self):
 
@@ -520,14 +514,16 @@ class MountClassifier(object):
     def _confusion_matrix(self):
 
         self._cm = confusion_matrix(
-            self._validation_data['prediction'],
-            self._validation_data[self._classifier_info.target]
+            self._validation_data[self._classifier_info.target],
+            self._validation_data['prediction'],            
         )
 
     def plot_confusion_matrix(self, 
                               normalize=True, 
                               title='Confusion Matrix',
-                              cmap=plt.cm.Blues):
+                              cmap=plt.cm.Blues,
+                              path='',
+                              save=False):
         """
         This function prints and plots the confusion matrix. Normalization can be  
         applied by setting normalize=True.
@@ -554,6 +550,7 @@ class MountClassifier(object):
 
             print('Confusion matrix without normalization')  
 
+        plt.figure(figsize=(8,8))
         plt.imshow(cm, interpolation='nearest', cmap=cmap)  
         plt.title(title)
         plt.colorbar() 
@@ -578,6 +575,15 @@ class MountClassifier(object):
         plt.xlabel('Predicted label\naccuracy={:0.4f}; misclass={:0.4f}'.format(
             accuracy, misclass
         ))
+
+        if save:
+
+            if not os.path.exists(path):
+
+                os.makedirs(path)
+                print(f'directory created {path}')
+
+            plt.savefig(''.join([path, 'confusion_matrix.png']))
 
         plt.show()
 
@@ -642,6 +648,54 @@ class MountClassifier(object):
 
         return None
 
+    def save_32_bits_config(self, path):
+
+        print('Saving 32 bits environment...')
+
+        if not os.path.exists(path):
+
+            os.makedirs(path)
+            print(f'directory created {path}')
+
+        path_32_bits = ''.join([path, "32_bits\\"])
+
+        if not os.path.exists(path_32_bits):
+
+            os.makedirs(path_32_bits)
+            print(f'directory created {path_32_bits}')
+
+        dataset_filename = ''.join([self._classifier_info.name, '_train_data.csv'])
+
+        print('saving dataset to train the model...') 
+        self._train_data.to_csv(''.join([path_32_bits, dataset_filename]))
+
+        
+        model_info_32_bits = {
+            'name': self._classifier_info.name,
+            'target_column': self._classifier_info.target,
+            'features': self._classifier_info.features,
+            'train_data': dataset_filename,
+            'scaler': {
+                'instance': str(self._classifier_info.scaler),
+                'import-string': self._classifier_info.model_import_string['scaler']
+            },
+            'model': {
+                'instance': str(self._classifier_info.model['instance']),
+                'params': self._classifier_info.model['params'],
+                'import-string': self._classifier_info.model_import_string['model']
+            }
+        }
+
+        json_filename = ''.join([self._classifier_info.name, '_32_bits.json'])
+
+        print('saving json config for 32 bits...')
+
+        with open(''.join([path_32_bits, json_filename]), 'w') as f:
+
+            json.dump(model_info_32_bits, f, indent=4)
+
+        return None
+
     @property  
     def base_features(self):
 
@@ -690,7 +744,8 @@ class RegressorInfo(object):
                  metrics_rule=None,
                  features=None, 
                  target=None,
-                 feature_engineering=None):
+                 feature_engineering=None,
+                 model_import_string=None):
 
         self.name = name 
         self.regression_rule = regression_rule 
@@ -703,6 +758,7 @@ class RegressorInfo(object):
         self.features = features
         self.target = target
         self.feature_engineering = feature_engineering
+        self.model_import_string = model_import_string
 
 class MountRegressor(object):
 
@@ -789,7 +845,7 @@ class MountRegressor(object):
 
     def _prepare_train_data(self):
 
-        self._train_data = self._train_data[self._total_features +\
+        self._train_data = self._train_data[self._regressor_info.features +\
                                 [self._regressor_info.target]]
 
         self._train_data = NanDiscarder(self._train_data).data_without_nan
@@ -976,6 +1032,56 @@ class MountRegressor(object):
 
         return None
 
+    def plot_feature_importance(self, path, save=False, title=''):
+
+        if not isinstance(self._fitted_model, GradientBoostingRegressor):
+
+            raise TypeError('Feature Importance only supports Gradient Boosting Regressor')
+
+        df_fi = pd.DataFrame(
+            list(
+                zip(
+                    self._regressor_info.features,
+                    self._fitted_model.feature_importances_
+                )
+            ),
+            columns=["Feature", "Value"]
+        )
+        fi_mean = df_fi.groupby(["Feature"])['Value'].aggregate(np.mean)\
+            .reset_index().sort_values('Value', ascending=False)
+        
+        plt.figure(figsize=(20,8))
+        sns.barplot(
+            y='Feature',
+            x="Value", 
+            data=df_fi, 
+            palette='viridis', 
+            order=fi_mean['Feature']
+        )
+        plt.title("Feature Importance" + title)
+        
+        if save:
+
+            if not os.path.exists(path):
+
+                os.makedirs(path)
+                print(f'directory created {path}')
+
+            plt.savefig(
+                ''.join(
+                    [
+                        path,
+                        self._regressor_info.name,
+                        '_feature_importance.png'
+                    ]
+                ),
+                format='png'
+            )
+
+        plt.show()
+
+        return None
+
     def add_metric(self, metrics_info):
         
         metric_name = metrics_info['name']
@@ -987,6 +1093,54 @@ class MountRegressor(object):
         self.__dict__[metric_name] = metrics_function(y_real, y_pred)
         self._metrics.add(metric_name)
 
+        return None
+
+    def save_32_bits_config(self, path):
+
+        print('Saving 32 bits environment...')
+
+        if not os.path.exists(path):
+
+            os.makedirs(path)
+            print(f'directory created {path}')
+
+        path_32_bits = ''.join([path, "32_bits\\"])
+
+        if not os.path.exists(path_32_bits):
+
+            os.makedirs(path_32_bits)
+            print(f'directory created {path_32_bits}')
+
+        dataset_filename = ''.join([self._regressor_info.name, '_train_data.csv'])
+
+        print('saving dataset to train the model...') 
+        self._train_data.to_csv(''.join([path_32_bits, dataset_filename]))
+
+        
+        model_info_32_bits = {
+            'name': self._regressor_info.name,
+            'target_column': self._regressor_info.target,
+            'features': self._regressor_info.features,
+            'train_data': dataset_filename,
+            'scaler': {
+                'instance': str(self._regressor_info.scaler),
+                'import-string': self._regressor_info.model_import_string['scaler']
+            },
+            'model': {
+                'instance': str(self._regressor_info.model['instance']),
+                'params': self._regressor_info.model['params'],
+                'import-string': self._regressor_info.model_import_string['model']
+            }
+        }
+
+        json_filename = ''.join([self._regressor_info.name, '_32_bits.json'])
+
+        print('saving json config for 32 bits...')
+
+        with open(''.join([path_32_bits, json_filename]), 'w') as f:
+
+            json.dump(model_info_32_bits, f, indent=4)
+            
         return None
 
     @property
@@ -1037,8 +1191,46 @@ class MountRegressor(object):
     def base_features(self):
         return self._base_features
 
+class GainClassifier(object):
 
+    def __init__(self):
 
+        pass
+
+class MountClassifierUS(MountClassifier):
+
+    def __init__(self, class_info: ClassifierInfo):
+        
+        super().__init__(class_info)
+
+    def _fit_scaler(self):
+
+        pass 
+
+    def _fit_model(self):
+
+        pass
+
+    def _mount_pipeline(self):
+
+        self._pipeline = GainClassifier()
+
+        classifier_rule = self._classifier_info.classification_rule
+        target = self._classifier_info.target
+        
+        def predict(df, rule=classifier_rule, target=target):
+
+            df = classifier_rule(df)
+
+            predictions = df[target]
+
+            return np.array(predictions)
+
+        self._pipeline.predict = predict
+
+    def _apply_pipeline(self): 
+
+        self._validation_data['prediction'] = self._validation_data[self._classifier_info.target]
 
 
 

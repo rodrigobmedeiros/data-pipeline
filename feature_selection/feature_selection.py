@@ -153,7 +153,7 @@ class FeatureSelectionAnlysis(object):
 
     def _mount_predictions_info(self, id_model, prediction):
 
-        self._predictions[f'id - {id_model}'] = prediction
+        self._predictions[id_model] = prediction
 
         return None
 
@@ -184,13 +184,17 @@ class FeatureSelectionAnlysis(object):
 
             base_dataframe = base_dataframe.append(data, ignore_index=True)
 
-            self._mount_predictions_info(id_model, model.validation_data['prediction'])
+            self._mount_predictions_info(f'id - {id_model}', model.validation_data['prediction'])
 
-        # In order to keep column id iquals column names of predictions dataset  
+        # In order to keep column id equals column names of predictions dataset  
         # Type conversion was applied. float -> int.
         self._feature_selection_info = base_dataframe.dropna()
         self._feature_selection_info =\
             self._feature_selection_info.astype({'id': 'int64'})
+
+        self._mount_predictions_info(
+            'Resultado', model.validation_data[model_info.target]
+        )
 
     def save(self, path, filename):
         """
