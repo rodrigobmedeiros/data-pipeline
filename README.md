@@ -1,2 +1,2 @@
 # data-pipeline
-Construção de um pipeline automatizado para geração de modelos de machine learning.
+Automated pipeline to generate machine learnig models.
